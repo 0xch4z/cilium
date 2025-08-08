@@ -1034,11 +1034,14 @@ func (m *manager) NodeSync() {
 	})
 }
 
+// MeshNodeSync signals the manager that the initial nodes listing from
+// clustermesh has been completed. This allows the manager to initiate the
+// deletion of possible stale meshed nodes.
 func (m *manager) MeshNodeSync() {
 	m.pruneNodes(true)
 }
 
-func (m *manager) pruneNodes(includeMeshed bool) {
+func (m *manager) pruneNodes(filterMeshed bool) {
 	m.mutex.Lock()
 	if len(m.restoredNodes) == 0 {
 		m.mutex.Unlock()
@@ -1049,28 +1052,33 @@ func (m *manager) pruneNodes(includeMeshed bool) {
 		delete(m.restoredNodes, id)
 	}
 
-	if len(m.restoredNodes) > 0 {
+	toDelete := make([]*nodeTypes.Node, 0, len(m.restoredNodes))
+	for _, n := range m.restoredNodes {
+		if (n.Cluster == m.conf.ClusterName) != filterMeshed {
+			toDelete = append(toDelete, n)
+		}
+	}
+
+	if len(toDelete) > 0 {
 		if log.Logger.IsLevelEnabled(logrus.DebugLevel) {
-			printableNodes := make([]string, 0, len(m.restoredNodes))
-			for ni := range m.restoredNodes {
-				printableNodes = append(printableNodes, ni.String())
+			printableNodes := make([]string, 0, len(toDelete))
+			for _, n := range toDelete {
+				printableNodes = append(printableNodes, n.Identity().String())
 			}
 			log.WithFields(logrus.Fields{
 				"stale-nodes": printableNodes,
-			}).Debugf("Deleting %v stale nodes", len(m.restoredNodes))
+			}).Debugf("Deleting %d stale nodes", len(toDelete))
 		} else {
-			log.Infof("Deleting %v stale nodes", len(m.restoredNodes))
+			log.Infof("Deleting %d stale nodes", len(toDelete))
 		}
 	}
 	m.mutex.Unlock()
 
 	// Delete nodes now considered stale. Can't hold the mutex as
 	// NodeDeleted also acquires it.
-	for id, n := range m.restoredNodes {
-		if n.Cluster == m.conf.ClusterName || includeMeshed {
-			m.NodeDeleted(*n)
-			delete(m.restoredNodes, id)
-		}
+	for _, n := range toDelete {
+		m.NodeDeleted(*n)
+		delete(m.restoredNodes, n.Identity())
 	}
 }
 
