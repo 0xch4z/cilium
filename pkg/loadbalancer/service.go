@@ -94,6 +94,11 @@ type Service struct {
 	// +deepequal-gen=false
 	SourceRanges []netip.Prefix
 
+	// FrontendSourceRanges if non-empty will override SourceRanges and policy,
+	// per frontend.
+	// +deepequal-gen=false
+	FrontendSourceRanges FrontendSourceRanges
+
 	// PortNames maps a port name to a port number.
 	PortNames map[string]uint16
 
@@ -130,6 +135,7 @@ func (td TrafficDistribution) RequiresZoneUpdate() bool {
 func (svc *Service) DeepEqual(other *Service) bool {
 	return svc.deepEqual(other) &&
 		svc.ProxyRedirects.Equal(other.ProxyRedirects) &&
+		svc.FrontendSourceRanges.Equal(other.FrontendSourceRanges) &&
 		slices.EqualFunc(svc.SourceRanges, other.SourceRanges,
 			func(a, b netip.Prefix) bool {
 				return a == b
@@ -160,12 +166,70 @@ func (svc *Service) GetSourceRangesPolicy() SVCSourceRangesPolicy {
 }
 
 func (svc *Service) GetSourceRangesEnabled(svcType SVCType, lbSourceRangeAllTypes bool) bool {
+	hasSourceRanges := len(svc.SourceRanges) > 0 || slices.ContainsFunc(svc.FrontendSourceRanges,
+		func(sr FrontendSourceRange) bool { return len(sr.SourceRanges) > 0 })
+
 	if lbSourceRangeAllTypes {
-		return len(svc.SourceRanges) > 0
+		return hasSourceRanges
 	}
 	// loadBalancerSourceRanges also applies to ExternalIPs frontends of a LoadBalancer service.
-	return len(svc.SourceRanges) > 0 &&
+	return hasSourceRanges &&
 		(svcType == SVCTypeLoadBalancer || svcType == SVCTypeExternalIPs)
+}
+
+// FrontendSourceRange specifies the source ranges and policy for a matching frontend.
+type FrontendSourceRange struct {
+	ServicePort uint16
+	Protocol    L4Type
+
+	SourceRanges []netip.Prefix
+	Policy       *SVCSourceRangesPolicy
+}
+
+type FrontendSourceRanges []FrontendSourceRange
+
+func (s FrontendSourceRanges) Clone() FrontendSourceRanges {
+	if s == nil {
+		return nil
+	}
+	clone := slices.Clone(s)
+	for i := range clone {
+		clone[i].SourceRanges = slices.Clone(clone[i].SourceRanges)
+	}
+	return clone
+}
+
+// SourceRangesForFrontend gets the desired source range and policy to be enforced for a given frontend.
+func (svc *Service) SourceRangesForFrontend(fe *Frontend) (SVCSourceRangesPolicy, []netip.Prefix) {
+	for _, sr := range svc.FrontendSourceRanges {
+		if sr.ServicePort == fe.ServicePort &&
+			sr.Protocol == fe.Address.Protocol() {
+			policy := svc.GetSourceRangesPolicy()
+			if fePolicy := sr.Policy; fePolicy != nil {
+				policy = *fePolicy
+			}
+			return policy, sr.SourceRanges
+		}
+	}
+	return svc.GetSourceRangesPolicy(), svc.SourceRanges
+}
+
+func (s FrontendSourceRanges) Equal(other FrontendSourceRanges) bool {
+	if len(s) != len(other) {
+		return false
+	}
+	for i := range s {
+		if s[i].ServicePort != other[i].ServicePort ||
+			s[i].Protocol != other[i].Protocol ||
+			!slices.Equal(s[i].SourceRanges, other[i].SourceRanges) {
+			return false
+		}
+		if (s[i].Policy == nil) != (other[i].Policy == nil) ||
+			s[i].Policy != nil && *s[i].Policy != *other[i].Policy {
+			return false
+		}
+	}
+	return true
 }
 
 func (svc *Service) GetAnnotations() map[string]string {

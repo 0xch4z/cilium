@@ -677,6 +677,7 @@ func TestGetSourceRangesEnabled(t *testing.T) {
 	tests := []struct {
 		name                  string
 		sourceRanges          []netip.Prefix
+		frontendSourceRanges  FrontendSourceRanges
 		svcType               SVCType
 		lbSourceRangeAllTypes bool
 		want                  bool
@@ -686,6 +687,25 @@ func TestGetSourceRangesEnabled(t *testing.T) {
 			sourceRanges: []netip.Prefix{prefix},
 			svcType:      SVCTypeLoadBalancer,
 			want:         true,
+		},
+		{
+			name: "LoadBalancer with frontend source ranges",
+			frontendSourceRanges: FrontendSourceRanges{{
+				ServicePort:  80,
+				Protocol:     TCP,
+				SourceRanges: []netip.Prefix{prefix},
+			}},
+			svcType: SVCTypeLoadBalancer,
+			want:    true,
+		},
+		{
+			name: "LoadBalancer with empty frontend source ranges",
+			frontendSourceRanges: FrontendSourceRanges{{
+				ServicePort: 80,
+				Protocol:    TCP,
+			}},
+			svcType: SVCTypeLoadBalancer,
+			want:    false,
 		},
 		{
 			// loadBalancerSourceRanges must also apply to ExternalIPs frontends (#44718).
@@ -720,6 +740,17 @@ func TestGetSourceRangesEnabled(t *testing.T) {
 			want:                  true,
 		},
 		{
+			name: "NodePort with frontend source ranges, allTypes=true",
+			frontendSourceRanges: FrontendSourceRanges{{
+				ServicePort:  80,
+				Protocol:     TCP,
+				SourceRanges: []netip.Prefix{prefix},
+			}},
+			svcType:               SVCTypeNodePort,
+			lbSourceRangeAllTypes: true,
+			want:                  true,
+		},
+		{
 			name:    "LoadBalancer without source ranges",
 			svcType: SVCTypeLoadBalancer,
 			want:    false,
@@ -733,7 +764,10 @@ func TestGetSourceRangesEnabled(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc := &Service{SourceRanges: tt.sourceRanges}
+			svc := &Service{
+				SourceRanges:         tt.sourceRanges,
+				FrontendSourceRanges: tt.frontendSourceRanges,
+			}
 			got := svc.GetSourceRangesEnabled(tt.svcType, tt.lbSourceRangeAllTypes)
 			assert.Equal(t, tt.want, got)
 		})

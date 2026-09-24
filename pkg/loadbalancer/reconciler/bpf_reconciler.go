@@ -922,7 +922,9 @@ func (ops *BPFOps) updateFrontend(fe *loadbalancer.Frontend, isLocalAddr func(ne
 	isRoutable := !svcKey.IsSurrogate() &&
 		(svcType != loadbalancer.SVCTypeClusterIP || ops.cfg.ExternalClusterIP)
 
-	checkSourceRange := svc.GetSourceRangesEnabled(svcType, ops.cfg.LBSourceRangeAllTypes)
+	policy, sourceRanges := svc.SourceRangesForFrontend(fe)
+	checkSourceRange := len(sourceRanges) > 0 &&
+		svc.GetSourceRangesEnabled(svcType, ops.cfg.LBSourceRangeAllTypes)
 
 	forwardingMode := loadbalancer.ToSVCForwardingMode(ops.cfg.LBMode, uint8(proto))
 	if ops.cfg.LBModeAnnotation && svc.ForwardingMode != loadbalancer.SVCForwardingModeUndef {
@@ -938,7 +940,7 @@ func (ops *BPFOps) updateFrontend(fe *loadbalancer.Frontend, isLocalAddr func(ne
 		SessionAffinity:  svc.SessionAffinity,
 		IsRoutable:       isRoutable,
 		CheckSourceRange: checkSourceRange,
-		SourceRangeDeny:  checkSourceRange && svc.GetSourceRangesPolicy() == loadbalancer.SVCSourceRangesPolicyDeny,
+		SourceRangeDeny:  checkSourceRange && policy == loadbalancer.SVCSourceRangesPolicyDeny,
 		L7LoadBalancer:   svc.ProxyRedirects.Redirects(fe.ServicePort),
 		LoopbackHostport: svc.LoopbackHostPort || proxyDelegation != loadbalancer.SVCProxyDelegationNone,
 		Quarantined:      false,
@@ -1113,7 +1115,7 @@ func (ops *BPFOps) updateFrontend(fe *loadbalancer.Frontend, isLocalAddr func(ne
 	}
 	orphanSourceRanges := prevSourceRanges.Clone()
 	srcRangeValue := &maps.SourceRangeValue{}
-	for _, prefix := range fe.Service.SourceRanges {
+	for _, prefix := range sourceRanges {
 		if prefix.Addr().Is6() != fe.Address.IsIPv6() {
 			continue
 		}
